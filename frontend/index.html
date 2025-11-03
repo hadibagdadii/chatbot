@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Comet Support Assistant</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="dot">c</span><span>omet</span>
+    </div>
+    <div class="subtitle">Manufacturing Support • Local & Secure</div>
+  </header>
+
+  <main>
+    <div id="chat"></div>
+    <form id="composer">
+      <input id="input" type="text" placeholder="Describe the failure..." autocomplete="off" />
+      <button type="submit">Send</button>
+    </form>
+  </main>
+
+  <footer>Running locally with Ollama • FAISS • FastAPI</footer>
+  <script src="/static/script.js"></script>
+</body>
+</html>

@@ -1,0 +1,31 @@
+:root{
+  --bg:#0b0b10;
+  --panel:#14141c;
+  --text:#e9e9ef;
+  --muted:#a9a9b5;
+  --grad-start:#ff2d2d;
+  --grad-mid:#d41c7a;
+  --grad-end:#ff4aa2;
+}
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.45 Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+header{padding:18px 22px;background:linear-gradient(90deg,var(--grad-start),var(--grad-mid),var(--grad-end));color:white}
+.brand{font-weight:800;font-size:22px;display:flex;align-items:center;gap:2px}
+.subtitle{font-size:13px;opacity:0.9;margin-top:4px}
+main{max-width:900px;margin:24px auto;padding:0 16px;display:flex;flex-direction:column;height:calc(100vh - 160px)}
+#chat{background:var(--panel);border-radius:16px;padding:18px;overflow:auto;flex:1}
+.msg{display:flex;margin-bottom:14px}
+.msg .bubble{max-width:72%;padding:12px 14px;border-radius:14px;white-space:pre-wrap}
+.msg.user .bubble{margin-left:auto;background:linear-gradient(90deg,var(--grad-start),var(--grad-mid),var(--grad-end));color:white}
+.msg.bot .bubble{background:#1b1b26;color:var(--text)}
+#composer{display:flex;gap:10px;margin-top:16px}
+#composer input{flex:1;padding:12px 14px;border-radius:12px;border:1px solid #2a2a38;background:#12121a;color:var(--text)}
+#composer button{padding:12px 18px;border-radius:12px;border:none;background:linear-gradient(90deg,var(--grad-start),var(--grad-mid),var(--grad-end));color:white;font-weight:600;cursor:pointer}
+#composer button:disabled{opacity:0.5;cursor:not-allowed}
+footer{text-align:center;padding:16px;color:var(--muted);font-size:13px}
+.typing{display:inline-flex;align-items:center;gap:4px}
+.typing .dot{height:7px;width:7px;background:var(--muted);border-radius:50%;display:inline-block;animation:blink 1.4s infinite ease-in-out}
+.typing .dot:nth-child(2){animation-delay:0.2s}
+.typing .dot:nth-child(3){animation-delay:0.4s}
+@keyframes blink{0%,80%,100%{opacity:.2}40%{opacity:1}}
