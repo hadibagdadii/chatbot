@@ -8,10 +8,11 @@ CSV_PATH = DATA_DIR / "failures.csv"
 
 VSTORE_DIR = BASE_DIR / "faiss_store"
 
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3:8b")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:latest")
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
 
-TOP_N_DOCS = 12
+# Increased from 12 to 30 for better data coverage
+TOP_N_DOCS = 30
 TOP_K = 3
 DATE_COL = "date"
 

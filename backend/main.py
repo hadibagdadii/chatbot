@@ -7,7 +7,7 @@ import logging
 
 from .database import load_csv_to_df, persist_to_sqlite
 from .retrieval import create_or_load_faiss, retrieve_semantic
-from .chatbot import stream_response
+from .chatbot import stream_response, is_technical_query
 from .config import DB_PATH, CSV_PATH, VSTORE_DIR
 from .models import ChatRequest
 
@@ -101,12 +101,26 @@ async def chat(req: ChatRequest):
         )
     
     try:
-        vs = app.state.vectorstore
-        agg = retrieve_semantic(req.query, vs)
-        return StreamingResponse(
-            stream_response(req.query, agg), 
-            media_type="text/plain"
-        )
+        query = req.query
+        logger.info(f"Received query: {query}")
+        
+        # Check if this is a technical query that needs semantic search
+        if is_technical_query(query):
+            logger.info("Technical query detected - running semantic search")
+            vs = app.state.vectorstore
+            agg = retrieve_semantic(query, vs)
+            return StreamingResponse(
+                stream_response(query, agg), 
+                media_type="text/plain"
+            )
+        else:
+            logger.info("Casual query detected - responding conversationally")
+            # For casual queries, don't run expensive semantic search
+            return StreamingResponse(
+                stream_response(query, agg=None), 
+                media_type="text/plain"
+            )
+            
     except Exception as e:
         logger.error(f"Chat error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
