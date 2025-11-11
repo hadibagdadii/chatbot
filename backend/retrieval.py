@@ -1,13 +1,14 @@
 from pathlib import Path
 from typing import List, Dict, Any
 import pandas as pd
+import sqlite3
 from collections import Counter
 import logging
 import re
 from langchain_community.embeddings import OllamaEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain.docstore.document import Document
-from .config import (OLLAMA_MODEL, OLLAMA_HOST, VSTORE_DIR, TOP_N_DOCS, DATE_COL, TOP_K)
+from .config import (OLLAMA_MODEL, OLLAMA_HOST, VSTORE_DIR, TOP_N_DOCS, DATE_COL, TOP_K, DB_PATH)
 
 logger = logging.getLogger(__name__)
 
@@ -103,15 +104,110 @@ def _extract_part_numbers(query: str) -> List[str]:
     patterns = re.findall(r'\b\d{7,10}(?:-\d{3})?\b', query)
     return patterns
 
+def _extract_serials(query: str) -> List[str]:
+    """Extract serial numbers from query"""
+    # Look for 7+ digit numbers that could be serials
+    patterns = re.findall(r'\b\d{7,10}\b', query)
+    return patterns
+
+def get_exact_counts_from_db(part_numbers: List[str] = None, serials: List[str] = None, 
+                              failure_codes: List[str] = None) -> Dict[str, Any]:
+    """
+    Query the database directly for exact counts.
+    This ensures accuracy regardless of semantic search results.
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        results = {}
+        
+        # Get exact count for part numbers
+        if part_numbers:
+            for part in part_numbers:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM failures WHERE part_number = ?", 
+                    (part,)
+                )
+                count = cursor.fetchone()[0]
+                results[f"part_{part}_total"] = count
+                
+                # Get all failure codes for this part
+                cursor.execute(
+                    "SELECT failure_code, COUNT(*) as cnt FROM failures WHERE part_number = ? AND failure_code IS NOT NULL AND failure_code != '' GROUP BY failure_code ORDER BY cnt DESC",
+                    (part,)
+                )
+                failure_counts = cursor.fetchall()
+                results[f"part_{part}_failures"] = failure_counts
+                
+                # Get all materials for this part
+                cursor.execute(
+                    "SELECT material_code, material_desc, partclass, COUNT(*) as cnt FROM failures WHERE part_number = ? AND material_code IS NOT NULL AND material_code != '' GROUP BY material_code ORDER BY cnt DESC",
+                    (part,)
+                )
+                material_counts = cursor.fetchall()
+                results[f"part_{part}_materials"] = material_counts
+                
+                # Get recurring serials for this part
+                cursor.execute(
+                    "SELECT serialnumber, COUNT(*) as cnt FROM failures WHERE part_number = ? AND serialnumber IS NOT NULL AND serialnumber != '' GROUP BY serialnumber HAVING cnt > 1 ORDER BY cnt DESC",
+                    (part,)
+                )
+                recurring_serials = cursor.fetchall()
+                results[f"part_{part}_recurring_serials"] = recurring_serials
+        
+        # Get exact count for specific serials
+        if serials:
+            for serial in serials:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM failures WHERE serialnumber = ?",
+                    (serial,)
+                )
+                count = cursor.fetchone()[0]
+                results[f"serial_{serial}_total"] = count
+        
+        # Get exact count for failure codes
+        if failure_codes:
+            for code in failure_codes:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM failures WHERE failure_code = ?",
+                    (code,)
+                )
+                count = cursor.fetchone()[0]
+                results[f"failure_{code}_total"] = count
+        
+        conn.close()
+        logger.info(f"Database query results: {results}")
+        return results
+        
+    except Exception as e:
+        logger.error(f"Error querying database: {e}")
+        return {}
+
 def retrieve_semantic(query: str, vectorstore, top_n: int = TOP_N_DOCS) -> Dict[str, Any]:
     """
     Retrieve relevant documents and aggregate insights with better filtering and accuracy.
+    Now includes direct database queries for exact counts.
     """
     logger.info(f"Running semantic search for: {query}")
     
-    # Extract any specific part numbers mentioned
+    # Extract any specific part numbers, serials, or failure codes mentioned
     mentioned_parts = _extract_part_numbers(query)
-    logger.info(f"Detected part numbers in query: {mentioned_parts}")
+    mentioned_serials = _extract_serials(query)
+    
+    # Extract failure codes from query
+    failure_code_patterns = re.findall(r'\b[A-Z]{1,2}\+[A-Z]{1,2}\b', query, re.IGNORECASE)  # e.g., R+JX
+    
+    logger.info(f"Detected part numbers: {mentioned_parts}")
+    logger.info(f"Detected serials: {mentioned_serials}")
+    logger.info(f"Detected failure codes: {failure_code_patterns}")
+    
+    # Get exact counts from database
+    db_stats = get_exact_counts_from_db(
+        part_numbers=mentioned_parts,
+        serials=mentioned_serials,
+        failure_codes=failure_code_patterns
+    )
     
     # If part numbers are mentioned, get way more results for better coverage
     search_k = top_n * 3 if mentioned_parts else top_n * 2
@@ -123,6 +219,7 @@ def retrieve_semantic(query: str, vectorstore, top_n: int = TOP_N_DOCS) -> Dict[
         return {
             "message": "No relevant historical data found.",
             "query_context": query,
+            "database_stats": db_stats,
             "action_codes": [],
             "materials": [],
             "recurring_serials": [],
@@ -149,7 +246,7 @@ def retrieve_semantic(query: str, vectorstore, top_n: int = TOP_N_DOCS) -> Dict[
     # Extract metadata with better handling
     action_codes = []
     materials_list = []
-    material_details = {}  # Track full material info
+    material_details = {}
     serials = []
     dates = []
     failure_codes = []
@@ -178,9 +275,8 @@ def retrieve_semantic(query: str, vectorstore, top_n: int = TOP_N_DOCS) -> Dict[
         mat_desc = _clean_value(meta.get("material_desc"))
         part_class = _clean_value(meta.get("partclass"))
         
-        if mat_code:  # Only include if there's an actual material code
+        if mat_code:
             materials_list.append(mat_code)
-            # Store full details for later
             if mat_code not in material_details:
                 material_details[mat_code] = {
                     'code': mat_code,
@@ -244,6 +340,7 @@ def retrieve_semantic(query: str, vectorstore, top_n: int = TOP_N_DOCS) -> Dict[
         "retrieved_count": len(results),
         "query_context": query,
         "mentioned_parts": mentioned_parts,
+        "database_stats": db_stats,  # EXACT counts from database
         "action_codes": top_actions if top_actions else [{"note": "No action codes found"}],
         "failure_codes": top_failures if top_failures else [{"note": "No failure codes found"}],
         "materials": sorted_materials if sorted_materials else [{"note": "No materials recorded"}],

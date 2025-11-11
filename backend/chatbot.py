@@ -17,12 +17,12 @@ SYSTEM_PROMPT_TECHNICAL = """You are a precise manufacturing support assistant a
 
 CRITICAL RULES:
 1. ONLY use the data provided - never make up part numbers, codes, or materials
-2. Be direct and conversational - no formal headers like "Analysis Report" or "Summary of Findings"
-3. Always cite counts (how many times each item appears)
-4. If a material description shows "N/A", just state the material code
-5. Give practical, actionable advice based on the data
+2. ALWAYS cite the TOTAL database records first, then mention analyzed subset
+3. Be direct and conversational - no formal headers like "Analysis Report"
+4. Always cite exact counts from the database stats
+5. Give practical, actionable advice
 
-Respond in a helpful, direct tone. Start with what you found, then give recommendations."""
+Respond in a helpful, direct tone. Start with the database totals, then provide recommendations."""
 
 SYSTEM_PROMPT_CASUAL = """You are a helpful manufacturing support assistant having a natural conversation.
 
@@ -41,7 +41,7 @@ def is_technical_query(query: str) -> bool:
         if keyword in query_lower:
             return True
     
-    # Check for code patterns (e.g., "1025", "failure code 1234")
+    # Check for code patterns
     if re.search(r'\b\d{3,10}(?:-\d{3})?\b', query_lower):
         return True
     
@@ -56,37 +56,67 @@ def is_technical_query(query: str) -> bool:
     return False
 
 def format_context_for_llm(agg: Dict[str, Any]) -> str:
-    """Format the aggregated data in a clear, structured way for the LLM"""
+    """Format the aggregated data with EXACT database statistics"""
     
     parts = []
     
     # Add query context
     parts.append(f"USER QUERY: {agg.get('query_context', 'N/A')}")
-    parts.append(f"RECORDS ANALYZED: {agg.get('retrieved_count', 0)}")
     
-    if agg.get('mentioned_parts'):
-        parts.append(f"SPECIFIC PARTS QUERIED: {', '.join(agg['mentioned_parts'])}")
+    # Add EXACT database statistics (most important!)
+    db_stats = agg.get('database_stats', {})
+    if db_stats:
+        parts.append("\n---EXACT DATABASE STATISTICS---")
+        for key, value in db_stats.items():
+            if 'total' in key:
+                if 'part_' in key:
+                    part_num = key.split('_')[1]
+                    parts.append(f"\nTOTAL RECORDS FOR PART {part_num}: {value}")
+                elif 'serial_' in key:
+                    serial = key.split('_')[1]
+                    parts.append(f"\nTOTAL RECORDS FOR SERIAL {serial}: {value}")
+                elif 'failure_' in key:
+                    code = key.split('_')[1]
+                    parts.append(f"\nTOTAL RECORDS FOR FAILURE CODE {code}: {value}")
+            elif '_failures' in key:
+                part_num = key.split('_')[1]
+                parts.append(f"\nFAILURE CODES FOR PART {part_num}:")
+                for code, count in value[:5]:  # Top 5
+                    parts.append(f"  • {code}: {count}x")
+            elif '_materials' in key:
+                part_num = key.split('_')[1]
+                parts.append(f"\nMATERIALS USED FOR PART {part_num}:")
+                for mat_code, mat_desc, part_class, count in value[:5]:  # Top 5
+                    parts.append(f"  • {mat_code} - {mat_desc} ({part_class}): {count}x")
+            elif '_recurring_serials' in key:
+                part_num = key.split('_')[1]
+                if value:
+                    parts.append(f"\nRECURRING SERIALS FOR PART {part_num}:")
+                    for serial, count in value:
+                        parts.append(f"  • Serial {serial}: {count}x")
     
-    parts.append("\n---DATA FROM HISTORICAL LOGS---\n")
+    parts.append(f"\nSEMANTIC SEARCH ANALYZED: {agg.get('retrieved_count', 0)} most relevant records")
     
-    # Action codes
-    parts.append("MOST COMMON ACTION CODES:")
+    parts.append("\n---DATA FROM SEMANTIC SEARCH---\n")
+    
+    # Action codes from semantic search
+    parts.append("MOST COMMON ACTION CODES (in analyzed subset):")
     action_codes = agg.get('action_codes', [])
     if action_codes and isinstance(action_codes[0], dict) and 'code' in action_codes[0]:
         for item in action_codes:
-            parts.append(f"  • {item['code']} (seen {item['count']}x)")
+            parts.append(f"  • {item['code']} (seen {item['count']}x in analyzed records)")
     else:
         parts.append("  • No action codes found")
     
-    # Failure codes
+    # Failure codes from semantic search
     failure_codes = agg.get('failure_codes', [])
     if failure_codes and isinstance(failure_codes[0], dict) and 'code' in failure_codes[0]:
-        parts.append("\nMOST COMMON FAILURE CODES:")
+        parts.append("\nFAILURE CODES (in analyzed subset):")
         for item in failure_codes:
-            parts.append(f"  • {item['code']} (seen {item['count']}x)")
+            parts.append(f"  • {item['code']} (seen {item['count']}x in analyzed records)")
     
-    # Materials
-    parts.append("\nMOST FREQUENTLY USED MATERIALS:")
+    # Materials from semantic search
+    parts.append("\nMATERIALS (in analyzed subset):")
     materials = agg.get('materials', [])
     if materials and isinstance(materials[0], dict) and 'code' in materials[0]:
         for mat in materials:
@@ -98,23 +128,21 @@ def format_context_for_llm(agg: Dict[str, Any]) -> str:
             if desc != 'N/A':
                 parts.append(f"    Description: {desc}")
             parts.append(f"    Part Class: {pclass}")
-            parts.append(f"    Used {count}x in similar cases")
+            parts.append(f"    Seen {count}x in analyzed records")
     else:
         parts.append("  • No materials recorded")
     
-    # Recurring serials
+    # Recurring serials from semantic search
     recurring = agg.get('recurring_serials', [])
     if recurring and isinstance(recurring[0], dict) and 'serial' in recurring[0]:
-        parts.append("\nRECURRING SERIAL NUMBERS (potential repeat issues):")
+        parts.append("\nRECURRING SERIALS (in analyzed subset):")
         for item in recurring:
             parts.append(f"  • Serial {item['serial']} appeared {item['count']}x")
-    else:
-        parts.append("\nRECURRING SERIAL NUMBERS: None detected")
     
     # Stations
     stations = agg.get('common_stations', [])
     if stations and len(stations) > 0:
-        parts.append("\nMOST COMMON STATIONS:")
+        parts.append("\nCOMMON STATIONS:")
         for item in stations:
             parts.append(f"  • Station {item['station']} ({item['count']}x)")
     
@@ -141,15 +169,19 @@ def stream_response(query: str, agg: Dict[str, Any] = None) -> Generator[str, No
 
 {context}
 
-Based on the data above, answer this question directly and conversationally: {query}
+Based on the data above, answer this question directly: {query}
 
-Give a helpful, practical response. Include:
-- What the failure code means based on the data
-- What action to take (cite the most common action code)
-- What part to replace (cite the most commonly used material)
-- Any patterns you notice (recurring serials, common stations)
+IMPORTANT: 
+- Start by citing the TOTAL database records (e.g., "I found 63 total records for part 10003939 in the database")
+- Then mention you analyzed the most relevant subset
+- Provide practical recommendations based on the patterns
+- Be conversational and direct - no formal headers
 
-Be direct and skip formal headers. Just answer the question naturally."""
+Give specific advice including:
+- What the failure typically indicates
+- What action to take (cite the action code)
+- What part to replace (cite the material code and description)
+- Any recurring patterns (serials, stations)"""
         
     elif is_technical and (not agg or agg.get('retrieved_count', 0) == 0):
         # Technical query but no context found
@@ -175,7 +207,7 @@ The user said: {query}
 
 Respond naturally and briefly. Let them know you're here to help with manufacturing failures, defects, part issues, and failure codes.
 
-IMPORTANT: Do not put your response in quotation marks. Just respond naturally as if you're talking to them directly."""
+IMPORTANT: Do not put your response in quotation marks. Just respond naturally."""
     
     for token in llm.stream(prompt):
         yield token
